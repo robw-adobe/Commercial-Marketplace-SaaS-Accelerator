@@ -101,7 +101,7 @@ Specification references throughout this file point back to `bugfix.md` (Require
 
 ## Tasks
 
-- [ ] 1. Write bug condition exploration test
+- [x] 1. Write bug condition exploration test
   - **Property 1: Bug Condition** - Resilient Fetch Pipeline
   - **CRITICAL**: This test MUST FAIL on unfixed code — failure confirms the bug exists.
   - **DO NOT attempt to fix the test or the code when it fails.**
@@ -109,30 +109,30 @@ Specification references throughout this file point back to `bugfix.md` (Require
   - **GOAL**: Surface concrete counterexamples that demonstrate each branch of `isBugCondition` (transient API failure, large fan-out / sync-over-async saturation, unbounded EF query timeout, sustained API failure / missing circuit breaker, partial-failure non-isolation, missing empty-state guidance).
   - **Scoped PBT Approach**: Because the unfixed code is deterministic, scope the property-based generator to the concrete failing shapes from `design.md` "Examples" — e.g. `transientFailureCount ∈ {1,2}`, `subscriptionCount ∈ {200, 500}`, `consecutiveApiFailures = 6`, single-subscription failure index ∈ generated subscription set. This keeps the property reproducible while still exercising the input domain.
 
-  - [ ] 1.1 Add the AdminSite.Test test project
+  - [x] 1.1 Add the AdminSite.Test test project
     - Add a new test project `src/AdminSite.Test/AdminSite.Test.csproj` (or extend `src/Services.Test`) with package references `xunit`, `xunit.runner.visualstudio`, `Moq`, `FsCheck.Xunit` (or `CsCheck`), `Microsoft.EntityFrameworkCore.InMemory`.
     - Add project references to `src/Services` and `src/AdminSite` so the test project can drive the controller actions and the future `SubscriptionFetchPipeline`.
     - Wire the new project into `src/SaaSAccelerator.sln` so `dotnet test` discovers it.
     - _Requirements: 2.1, 2.2, 2.4, 2.6, 2.7, 2.8_
 
-  - [ ] 1.2 Build the fake IMarketplaceSaaSClient (Moq)
+  - [x] 1.2 Build the fake IMarketplaceSaaSClient (Moq)
     - Create a Moq-based fake `IMarketplaceSaaSClient` that lets each test inject the failure shapes from `design.md` "Examples": throw `RequestFailedException(429)` once, throw `RequestFailedException(500)` for one specific `subscriptionId`, throw `RequestFailedException(503)` indefinitely, delay N ms per call.
     - Expose helpers/builders to compose those failure modes per test case so each branch of `isBugCondition` can be exercised independently.
     - _Requirements: 2.1, 2.2, 2.6, 2.8_
 
-  - [ ] 1.3 Build the stub SaasKitContext over EF InMemory with generators
+  - [x] 1.3 Build the stub SaasKitContext over EF InMemory with generators
     - Build a stub `SaasKitContext` over `Microsoft.EntityFrameworkCore.InMemory` and seed varying subscription counts (50, 200, 50_000) using FsCheck/CsCheck generators.
     - Provide generators for subscription corpora, plan distributions, and status mixes so they can be reused by the preservation tests in task 2.
     - _Requirements: 2.2, 2.4, 2.7_
 
-  - [ ] 1.4 Author FetchPipeline_OnBugConditionInputs_SatisfiesProperty1
+  - [x] 1.4 Author FetchPipeline_OnBugConditionInputs_SatisfiesProperty1
     - Write a single property test method `FetchPipeline_OnBugConditionInputs_SatisfiesProperty1` that, for any generated input where `isBugCondition(input)` evaluates true:
       - Drives `HomeController.FetchAllSubscriptions` (or the `SubscriptionFetchPipeline` once it exists — until then, drive the controller action directly) and the `Subscriptions()` action through the doubles from tasks 1.2 and 1.3.
       - Asserts the conjunction from `design.md` Property 1: no 5xx response, retries observed when `apiExperiencesTransientFailure`, partial progress preserved when one subscription fails, peak concurrent plan-fetch calls is bounded, circuit-breaker activates when `consecutiveApiFailures > 5`, and structured log entries are emitted for every retry / break / per-subscription failure.
       - Also asserts `design.md` Property 5: when seeded subscription count is zero, the rendered `Subscriptions` view contains the new empty-state guidance copy.
     - _Requirements: 2.1, 2.2, 2.4, 2.6, 2.7, 2.8_
 
-  - [ ] 1.5 Run on UNFIXED code and document counterexamples
+  - [x] 1.5 Run on UNFIXED code and document counterexamples
     - Run the property test on UNFIXED code.
     - **EXPECTED OUTCOME**: Test FAILS (this is correct — it proves the bug exists).
     - Document the counterexamples in the test output / a comment block in the test class. Examples to confirm:
@@ -151,49 +151,49 @@ Specification references throughout this file point back to `bugfix.md` (Require
   - Property-based testing is required here because the input space (subscription corpora of varying size, plan distributions, status mixes, page sizes) is too large for hand-written cases.
   - **EXPECTED OUTCOME**: Tests PASS on unfixed code (this confirms baseline behavior to preserve).
 
-  - [ ] 2.1 Observation: capture happy-path 50-subscription snapshot on UNFIXED code
+  - [~] 2.1 Observation: capture happy-path 50-subscription snapshot on UNFIXED code
     - Run the UNFIXED code with 50 subscriptions where every Marketplace API call succeeds first try.
     - Record the final state of `Subscriptions`, `Plans`, `Offers`, `Users`, and `SubscriptionAuditLogs` tables into a golden snapshot under `src/AdminSite.Test/Snapshots/`.
     - This snapshot becomes the baseline for PBT-2.1 in task 2.4.
     - _Requirements: 3.1, 3.2, 3.3_
 
-  - [ ] 2.2 Observation: capture status/plan/quantity-change audit-log snapshot on UNFIXED code
+  - [~] 2.2 Observation: capture status/plan/quantity-change audit-log snapshot on UNFIXED code
     - Seed five subscriptions where one's status, plan, or quantity changes between two consecutive fetches and run the UNFIXED code through both fetches.
     - Record the resulting audit-log rows into a golden snapshot under `src/AdminSite.Test/Snapshots/`.
     - This snapshot becomes the baseline for the audit-log assertions in PBT-2.1 / PBT-2.3.
     - _Requirements: 3.2_
 
-  - [ ] 2.3 Observation: capture per-operation snapshots on UNFIXED code
+  - [~] 2.3 Observation: capture per-operation snapshots on UNFIXED code
     - For each of `SubscriptionDetails`, `SubscriptionOperation` (Activate / Deactivate), change-plan, change-quantity, and `RecordUsage`, run the UNFIXED code on a successful, non-failing input.
     - Record the controller response and resulting DB state into golden snapshots under `src/AdminSite.Test/Snapshots/`.
     - These snapshots become the baseline for PBT-2.4 in task 2.7.
     - _Requirements: 3.5, 2.5_
 
-  - [ ] 2.4 Implement PBT-2.1 (core preservation) and verify on UNFIXED code
+  - [~] 2.4 Implement PBT-2.1 (core preservation) and verify on UNFIXED code
     - **PBT-2.1 (Property 2 - core preservation)**: For all inputs where the API succeeds first try, `subscriptionCount ≤ threadPoolSaturationThreshold`, and `dbQueryDuration ≤ dbTimeoutThreshold`, assert structural equality of `Subscriptions`, `Plans`, `Offers`, `Users`, `SubscriptionAuditLogs` tables between `F` (unfixed) and `F'` (fixed).
     - Compare against the snapshots from tasks 2.1 and 2.2 so the assertion can run on UNFIXED code today (with `F == F`).
     - Verify the test PASSES on UNFIXED code.
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
 
-  - [ ] 2.5 Implement PBT-2.2 (pagination correctness) and verify on UNFIXED code
+  - [~] 2.5 Implement PBT-2.2 (pagination correctness) and verify on UNFIXED code
     - **PBT-2.2 (Property 3 - pagination correctness)**: For random `(pageIndex, pageSize)` and random subscription corpora, assert that `concat(GetPaged(1..N, pageSize)).Items` equals `Get()` ordering, and that `TotalCount` equals the seeded count.
     - Because `GetPaged` does not exist on UNFIXED code, add a temporary `[Skip("Awaiting paginated repo from task 3.4")]` annotation (or equivalent) and document the unfixed-code observation: `Get()` returns the full ordered set today.
     - Verify the unskipped portions PASS on UNFIXED code.
     - _Requirements: 2.3, 3.4_
 
-  - [ ] 2.6 Implement PBT-2.3 (idempotent fetch) and verify on UNFIXED code
+  - [~] 2.6 Implement PBT-2.3 (idempotent fetch) and verify on UNFIXED code
     - **PBT-2.3 (Property 4 - idempotent fetch)**: For random sequences of fetch ticks against the same Marketplace payload, assert final DB state is identical to running a single fetch (audit logs are written only on detected change, not on every run).
     - Because the hosted background service does not exist on UNFIXED code, drive consecutive manual `FetchAllSubscriptions` invocations and add a temporary `[Skip("Awaiting SubscriptionLazyLoaderHostedService from task 3.8")]` annotation on the hosted-service-driven assertion.
     - Verify the unskipped portions PASS on UNFIXED code.
     - _Requirements: 2.5, 3.1, 3.2, 3.3_
 
-  - [ ] 2.7 Implement PBT-2.4 (subscription operations unaffected) and verify on UNFIXED code
+  - [~] 2.7 Implement PBT-2.4 (subscription operations unaffected) and verify on UNFIXED code
     - **PBT-2.4 (Subscription operations unaffected)**: For each per-subscription operation (Activate, Deactivate, change plan, change quantity, RecordUsage), assert identical controller response and DB state between `F` and `F'` for a non-failing input.
     - Compare against the snapshots from task 2.3 so the assertion can run on UNFIXED code today.
     - Verify the test PASSES on UNFIXED code.
     - _Requirements: 3.5_
 
-  - [ ] 2.8 Commit golden snapshots and confirm all four PBT files run green on UNFIXED code
+  - [~] 2.8 Commit golden snapshots and confirm all four PBT files run green on UNFIXED code
     - Commit golden snapshots under `src/AdminSite.Test/Snapshots/` so the unfixed-vs-fixed comparison in 3.10 is fully reproducible.
     - Run PBT-2.1 through PBT-2.4 together on UNFIXED code and confirm all four files report green (modulo the documented temporary skips on PBT-2.2 / PBT-2.3).
     - Mark task complete when tests are written, run, and passing on unfixed code.
@@ -201,7 +201,7 @@ Specification references throughout this file point back to `bugfix.md` (Require
 
 - [ ] 3. Fix for admin subscription fetch resilience
 
-  - [ ] 3.1 Add Polly package and resilience configuration POCO
+  - [~] 3.1 Add Polly package and resilience configuration POCO
     - Add `Polly` (>= 8.x) `<PackageReference>` to `src/Services/Services.csproj`.
     - Create `src/Services/Configurations/MarketplaceResilienceOptions.cs` as a POCO with: `MaxRetries` (default 3), `BaseDelaySeconds` (default 1), `ConsecutiveFailureThreshold` (default 5), `CooldownSeconds` (default 60), `MaxConcurrentPlanFetches` (default 5), `BackgroundSyncIntervalSeconds` (default 300), `BackgroundSyncEnabled` (default true), `PageSize` (default 100), `DatabaseQueryTimeoutSeconds` (default 30).
     - Add a `MarketplaceResilience` section with these defaults to `src/AdminSite/appsettings.json`.
@@ -212,7 +212,7 @@ Specification references throughout this file point back to `bugfix.md` (Require
     - _Preservation: defaults are chosen so existing happy-path inputs are unaffected_
     - _Requirements: 2.1, 2.2, 2.3, 2.5, 2.6_
 
-  - [ ] 3.2 Implement MarketplaceResiliencePolicy
+  - [~] 3.2 Implement MarketplaceResiliencePolicy
     - Create `src/Services/Services/Resilience/MarketplaceResiliencePolicy.cs` exposing `static IAsyncPolicy Build(MarketplaceResilienceOptions options, ILogger logger)`.
     - Compose `WaitAndRetryAsync(MaxRetries, attempt => TimeSpan.FromSeconds(BaseDelaySeconds * Math.Pow(2, attempt-1)))` (with optional decorrelated jitter) wrapped by `CircuitBreakerAsync(handledEventsAllowedBeforeBreaking: ConsecutiveFailureThreshold, durationOfBreak: TimeSpan.FromSeconds(CooldownSeconds))` via `Policy.WrapAsync`.
     - Predicate: handle `RequestFailedException` whose `Status` is in `{408, 429, 500, 502, 503, 504}`. Do not retry on `400/401/403/404/409` and do not count them toward the breaker.
@@ -223,7 +223,7 @@ Specification references throughout this file point back to `bugfix.md` (Require
     - _Preservation: success-on-first-attempt path executes the inner delegate exactly once with no observable side effects_
     - _Requirements: 2.1, 2.6, 2.8_
 
-  - [ ] 3.3 Implement FulfillmentApiServiceWithPolicy decorator
+  - [~] 3.3 Implement FulfillmentApiServiceWithPolicy decorator
     - Create `src/Services/Services/FulfillmentApiServiceWithPolicy.cs` implementing `IFulfillmentApiService` and constructor-injecting an inner `FulfillmentApiService` plus the policy from 3.2.
     - For every method, wrap the inner call in `policy.ExecuteAsync(ctx => innerCall(), new Context { ["operation"] = nameof(Method), ["subscriptionId"] = subscriptionId })`.
     - In `src/AdminSite/Startup.cs`, register the inner `FulfillmentApiService` as a private dependency (`services.AddScoped<FulfillmentApiService>()`) and register `IFulfillmentApiService` to resolve `FulfillmentApiServiceWithPolicy`. Mirror the registration in `src/CustomerSite/Startup.cs` and `src/MeteredTriggerJob` if those projects also bind `IFulfillmentApiService`, so resilience applies uniformly.
@@ -233,7 +233,7 @@ Specification references throughout this file point back to `bugfix.md` (Require
     - _Preservation: Section "Preservation Requirements / Scope" — CustomerSite, MeteredScheduler, status handlers must be byte-for-byte identical on success path_
     - _Requirements: 2.1, 2.6, 2.8, 3.5_
 
-  - [ ] 3.4 Add paginated repository method
+  - [~] 3.4 Add paginated repository method
     - Add `GetPaged(int pageIndex, int pageSize)` (or `GetPagedAsync`) to `src/DataAccess/Contracts/ISubscriptionsRepository.cs` returning a new `PagedResult<Subscriptions>` record (`Items`, `TotalCount`, `PageIndex`, `PageSize`) — place the record under `src/DataAccess/Entities/PagedResult.cs`.
     - Implement in `src/DataAccess/Services/SubscriptionsRepository.cs` using `IQueryable` with `Include(s => s.User).OrderByDescending(s => s.CreateDate).Skip((pageIndex-1)*pageSize).Take(pageSize)` plus a separate `Count()` for the total. Clamp `pageIndex >= 1`, `pageSize >= 1`.
     - **Do not change the existing `Get()` method** — its signature and ordering must be preserved (it is consumed by the fetch pipeline and other controllers).
@@ -243,7 +243,7 @@ Specification references throughout this file point back to `bugfix.md` (Require
     - _Preservation: existing `Get()` callers see no change_
     - _Requirements: 2.3, 3.4_
 
-  - [ ] 3.5 Implement SubscriptionFetchPipeline
+  - [~] 3.5 Implement SubscriptionFetchPipeline
     - Create `src/Services/Services/SubscriptionFetchPipeline.cs` exposing `Task<FetchResult> ExecuteAsync(int currentUserId, CancellationToken ct)`.
     - Define `FetchResult` (record / class) with `Total`, `Succeeded`, `Failed`, `DurationMs`, and `IReadOnlyList<SubscriptionFailure> Failures` (each carrying `subscriptionId`, `operation`, `errorMessage`).
     - Move the body of the existing `HomeController.FetchAllSubscriptions` into this service. Replace every `.GetAwaiter().GetResult()` with `await`.
@@ -257,7 +257,7 @@ Specification references throughout this file point back to `bugfix.md` (Require
     - _Preservation: Requirements 3.1–3.3 — same offers/plans/users/subscriptions/audit-log writes for non-buggy inputs_
     - _Requirements: 2.1, 2.2, 2.4, 2.8, 3.1, 3.2, 3.3_
 
-  - [ ] 3.6 Refactor HomeController.FetchAllSubscriptions to fully async
+  - [~] 3.6 Refactor HomeController.FetchAllSubscriptions to fully async
     - Change signature to `public async Task<IActionResult> FetchAllSubscriptions()`.
     - Inject `SubscriptionFetchPipeline` via constructor.
     - Body becomes: `var result = await pipeline.ExecuteAsync(currentUserId, HttpContext.RequestAborted); return result.Failed == result.Total && result.Total > 0 ? BadRequest(result) : Ok(result);`.
@@ -268,7 +268,7 @@ Specification references throughout this file point back to `bugfix.md` (Require
     - _Preservation: Requirements 3.1–3.3, 3.5_
     - _Requirements: 2.1, 2.2, 2.4, 2.8, 3.1, 3.2, 3.3_
 
-  - [ ] 3.7 Add pagination + empty-state to HomeController.Subscriptions and view
+  - [~] 3.7 Add pagination + empty-state to HomeController.Subscriptions and view
     - Create `src/Services/Models/PaginatedSubscriptionViewModel.cs` extending or wrapping `SubscriptionViewModel` with `int TotalCount`, `int PageIndex`, `int PageSize`, `bool IsEmpty`, `bool BackgroundSyncEnabled`, `int BackgroundSyncIntervalSeconds`.
     - Update `Subscriptions(int pageIndex = 1, int pageSize = 100)` to read query-string params, clamp them against `MarketplaceResilienceOptions.PageSize`, call `subscriptionRepo.GetPaged(pageIndex, pageSize)`, map the slice to `SubscriptionResultExtension` using the existing logic, and populate the new view model. When `TotalCount == 0`, set `IsEmpty = true`.
     - Update `src/AdminSite/Views/Home/Subscriptions.cshtml`:
@@ -280,7 +280,7 @@ Specification references throughout this file point back to `bugfix.md` (Require
     - _Preservation: Requirement 3.4 — same columns, same ordering, same dropdown actions_
     - _Requirements: 2.3, 2.7, 3.4_
 
-  - [ ] 3.8 Implement SubscriptionLazyLoaderHostedService
+  - [~] 3.8 Implement SubscriptionLazyLoaderHostedService
     - Create `src/Services/Services/Hosted/SubscriptionLazyLoaderHostedService.cs` deriving from `BackgroundService`.
     - In `ExecuteAsync(CancellationToken stoppingToken)`: loop `while (!stoppingToken.IsCancellationRequested)` { `try { using var scope = serviceProvider.CreateScope(); var pipeline = scope.ServiceProvider.GetRequiredService<SubscriptionFetchPipeline>(); var systemUserId = ...; var result = await pipeline.ExecuteAsync(systemUserId, stoppingToken); logger.LogInformation(structuredPayload); } catch (OperationCanceledException) { break; } catch (Exception ex) { logger.LogError(ex, ...); } await Task.Delay(TimeSpan.FromSeconds(options.BackgroundSyncIntervalSeconds), stoppingToken); }`.
     - Resolve `systemUserId` by upserting a synthetic user (e.g. `system@saas-accelerator.local`) on first run so audit-log foreign keys remain valid.
@@ -291,7 +291,7 @@ Specification references throughout this file point back to `bugfix.md` (Require
     - _Preservation: idempotence is the preservation contract — repeated runs do not produce duplicate audit logs or row changes_
     - _Requirements: 2.5, 2.8_
 
-  - [ ] 3.9 Verify bug condition exploration test now passes
+  - [~] 3.9 Verify bug condition exploration test now passes
     - **Property 1: Expected Behavior** - Resilient Fetch Pipeline
     - **IMPORTANT**: Re-run the SAME test from task 1 — do NOT write a new test.
     - The test from task 1 encodes the expected behavior; when it passes, the expected behavior is satisfied for all inputs in `isBugCondition`.
@@ -300,7 +300,7 @@ Specification references throughout this file point back to `bugfix.md` (Require
     - If the test still fails, return to the relevant 3.x sub-task and address the failing assertion — do not weaken the assertion.
     - _Requirements: 2.1, 2.2, 2.4, 2.6, 2.7, 2.8 (Property 1 + Property 5)_
 
-  - [ ] 3.10 Verify preservation tests still pass
+  - [~] 3.10 Verify preservation tests still pass
     - **Property 2: Preservation** - Non-Buggy Fetch and Page Behavior
     - **IMPORTANT**: Re-run the SAME tests from task 2 — do NOT write new tests.
     - Run PBT-2.1 through PBT-2.4. The snapshot comparisons must still hold against the fixed pipeline.
@@ -310,33 +310,33 @@ Specification references throughout this file point back to `bugfix.md` (Require
 
 - [ ] 4. Checkpoint - Ensure all tests pass
 
-  - [ ] 4.1 Build the full solution
+  - [~] 4.1 Build the full solution
     - Run `dotnet build src/SaaSAccelerator.sln`.
     - Confirm zero errors and zero new warnings versus the baseline before this fix.
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 3.1, 3.2, 3.3, 3.4, 3.5_
 
-  - [ ] 4.2 Run the full test suite
+  - [~] 4.2 Run the full test suite
     - Run `dotnet test src/SaaSAccelerator.sln`.
     - Confirm every test (unit, property-based, integration) passes — including the property tests from tasks 1 and 2 and the unit tests added by 3.2, 3.4, 3.5, 3.8.
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 3.1, 3.2, 3.3, 3.4, 3.5_
 
-  - [ ] 4.3 Smoke check: AdminSite startup and Subscriptions page rendering
+  - [~] 4.3 Smoke check: AdminSite startup and Subscriptions page rendering
     - Start the AdminSite (`dotnet run --project src/AdminSite`) against an empty database.
     - Confirm `/Home/Subscriptions` renders with pagination controls and the empty-state panel as designed in task 3.7.
     - _Requirements: 2.3, 2.7, 3.4_
 
-  - [ ] 4.4 Smoke check: hosted service tick and parity with manual fetch
+  - [~] 4.4 Smoke check: hosted service tick and parity with manual fetch
     - With the AdminSite running, wait for the first tick of `SubscriptionLazyLoaderHostedService`.
     - Confirm a structured log entry is produced on that tick.
     - Confirm DB state matches what a manual `FetchAllSubscriptions` produces against the same Marketplace fixture.
     - _Requirements: 2.5, 2.8, 3.1, 3.2, 3.3_
 
-  - [ ] 4.5 Smoke check: stubbed circuit-breaker scenario end-to-end
+  - [~] 4.5 Smoke check: stubbed circuit-breaker scenario end-to-end
     - Drive a stubbed circuit-breaker scenario (sustained 5xx) end-to-end through the AdminSite.
     - Confirm calls fail fast during the cooldown window, then succeed when the stub recovers and the breaker transitions back to closed.
     - _Requirements: 2.1, 2.6, 2.8_
 
-  - [ ] 4.6 Surface remaining open questions for the user
+  - [~] 4.6 Surface remaining open questions for the user
     - Surface any remaining open questions for the user, particularly defaults for `BackgroundSyncIntervalSeconds`, `MaxConcurrentPlanFetches`, and the location of the synthetic system user used by the hosted service.
     - Capture decisions on these questions in `bugfix.md` / `design.md` if they change behavior.
     - _Requirements: 2.5, 2.8_
