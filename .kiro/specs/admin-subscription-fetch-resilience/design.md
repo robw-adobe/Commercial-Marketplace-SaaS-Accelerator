@@ -150,8 +150,9 @@ Assuming the root cause analysis is correct, the fix introduces a small number o
 **File**: `src/Services/Configurations/MarketplaceResilienceOptions.cs` (new)
 
 **Specific Changes**:
-1. POCO bound from `appsettings.json` section `MarketplaceResilience` with: `MaxRetries` (default 3), `BaseDelaySeconds` (default 1), `ConsecutiveFailureThreshold` (default 5), `CooldownSeconds` (default 60), `MaxConcurrentPlanFetches` (default 5), `BackgroundSyncIntervalSeconds` (default 300), `PageSize` (default 100), `DatabaseQueryTimeoutSeconds` (default 30).
+1. POCO bound from `appsettings.json` section `MarketplaceResilience` with: `MaxRetries` (default 3), `BaseDelaySeconds` (default 1), `ConsecutiveFailureThreshold` (default 5), `CooldownSeconds` (default 60), `MaxConcurrentPlanFetches` (default **20** — sized for high-volume publishers; see Configuration Decisions below), `BackgroundSyncIntervalSeconds` (default 300), `PageSize` (default 100), `DatabaseQueryTimeoutSeconds` (default 30).
 2. Register via `services.Configure<MarketplaceResilienceOptions>(Configuration.GetSection("MarketplaceResilience"))`.
+3. `DatabaseQueryTimeoutSeconds` is wired to `sqlOptions.CommandTimeout()` inside `AddDbContext` in `Startup.cs` (see Configuration Decisions below).
 
 **File**: `src/Services/Services/SubscriptionFetchPipeline.cs` (new)
 
@@ -170,7 +171,7 @@ Assuming the root cause analysis is correct, the fix introduces a small number o
 
 **Specific Changes**:
 1. Convert `FetchAllSubscriptions` to `public async Task<IActionResult> FetchAllSubscriptions()`. Inject `SubscriptionFetchPipeline` via constructor, `await pipeline.ExecuteAsync(currentUserId, HttpContext.RequestAborted)`, and return `Ok(result)` or `BadRequest(result)` based on whether all subscriptions failed.
-2. Update `Subscriptions(int pageIndex = 1, int pageSize = 100)` to read `pageIndex` and `pageSize` from query string (clamped against `MarketplaceResilienceOptions.PageSize`), call the new paginated repository method, and populate a `PaginatedSubscriptionViewModel` with `TotalCount`, `PageIndex`, `PageSize`, and the page's items.
+2. Update `Subscriptions(int pageIndex = 1, int pageSize = 0)` to read `pageIndex` and `pageSize` from query string. `pageSize` defaults to `MarketplaceResilienceOptions.PageSize` when zero; both are clamped to the configured maximum. Calls the new paginated repository method and populates a `PaginatedSubscriptionViewModel` with `TotalCount`, `PageIndex`, `PageSize`, and the page's items.
 3. When `TotalCount == 0`, set a flag on the view model so the view renders the new empty-state guidance.
 
 **File**: `src/DataAccess/Contracts/ISubscriptionsRepository.cs` and `src/DataAccess/Services/SubscriptionsRepository.cs`
@@ -193,8 +194,20 @@ Assuming the root cause analysis is correct, the fix introduces a small number o
 
 **Specific Changes**:
 1. Update `@model` to the new `PaginatedSubscriptionViewModel`.
-2. Add pagination controls (Previous, Next, page indicator) that POST/GET with `?pageIndex=&pageSize=`.
+2. Add pagination controls (Previous, Next, page indicator) plus a **rows-per-page selector** (25 / 50 / 100 / 200) that navigate via `?pageIndex=&pageSize=`. The selector renders on every page with subscriptions so users can expand or contract the view regardless of total count.
 3. Replace the existing `else` branch ("No subscriptions from your customers yet!") with a richer empty-state panel that conditionally shows guidance about the background sync interval and a primary call-to-action to trigger a manual fetch.
+
+## Configuration Decisions
+
+The following operator decisions were made after implementation and are reflected in `appsettings.json` and the POCO defaults:
+
+| Setting | Default | Decision |
+|---|---|---|
+| `BackgroundSyncIntervalSeconds` | 300 | Accepted as reasonable. May need tuning down for high-volume publishers (e.g. Adobe). |
+| `MaxConcurrentPlanFetches` | **20** | Raised from 5 to take advantage of the Marketplace API quota (400 req/min). Adobe is a large-volume publisher. |
+| `PageSize` | 100 | Kept at 100. The view now also exposes a per-page selector (25/50/100/200) so operators can choose their preferred density without a config change. |
+| `DatabaseQueryTimeoutSeconds` | 30 | Wired directly to `sqlOptions.CommandTimeout()` in `AddDbContext` via `Startup.cs`. This closes the OQ-5 action item. |
+| Synthetic system user | `system@saas-accelerator.local` | Accepted as-is. The email domain is not configurable; team confirmed it is acceptable as a well-known identity. |
 
 ## Testing Strategy
 
