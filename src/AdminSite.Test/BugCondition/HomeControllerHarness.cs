@@ -177,6 +177,96 @@ internal static class HomeControllerHarness
         return new Built(controller, ctx, applicationLogRepo, capturedLogs);
     }
 
+    /// <summary>
+    /// Build a new controller that shares an existing <see cref="SaasKitContext"/>
+    /// with a different <see cref="FakeMarketplaceSaaSClient"/>. This is used by
+    /// the audit-log snapshot test (task 2.2) to run a second FetchAllSubscriptions
+    /// call on the same in-memory database so the second call can detect changes
+    /// written by the first call.
+    /// </summary>
+    public static Built BuildWithExistingContext(
+        SaasKitContext ctx,
+        FakeMarketplaceSaaSClient fakeClient)
+    {
+        if (ctx is null) throw new ArgumentNullException(nameof(ctx));
+        if (fakeClient is null) throw new ArgumentNullException(nameof(fakeClient));
+
+        var subscriptionsRepo = new SubscriptionsRepository(ctx);
+        var appConfigRepo = new ApplicationConfigRepository(ctx);
+        var plansRepo = new PlansRepository(ctx, appConfigRepo);
+        var usersRepo = new UsersRepository(ctx);
+        var subscriptionLogsRepo = new SubscriptionLogRepository(ctx);
+        var offersRepo = new OffersRepository(ctx);
+        var applicationLogRepo = new ApplicationLogRepository(ctx);
+
+        var sdkConfig = new SaaSApiClientConfiguration
+        {
+            FulFillmentAPIBaseURL = "https://localhost/fake-marketplace",
+            FulFillmentAPIVersion = "2018-08-31",
+        };
+
+        var capturedLogs = new CapturedLoggerSink();
+        var fulfillmentLogger = new SinkBackedContractsILogger(capturedLogs);
+        var fulfillmentApiService = new FulfillmentApiService(
+            fakeClient.Client,
+            sdkConfig,
+            fulfillmentLogger);
+
+        var loggerFactory = new CapturedLoggerFactory(capturedLogs);
+
+        var billingApiService = new Mock<IMeteredBillingApiService>(MockBehavior.Loose).Object;
+        var subscriptionUsageLogsRepository = new Mock<ISubscriptionUsageLogsRepository>(MockBehavior.Loose).Object;
+        var dimensionsRepository = new Mock<IMeteredDimensionsRepository>(MockBehavior.Loose).Object;
+        var emailTemplateRepository = new Mock<IEmailTemplateRepository>(MockBehavior.Loose).Object;
+        var planEventsMappingRepository = new Mock<IPlanEventsMappingRepository>(MockBehavior.Loose).Object;
+        var eventsRepository = new Mock<IEventsRepository>(MockBehavior.Loose).Object;
+        var emailService = new Mock<IEmailService>(MockBehavior.Loose).Object;
+        var offersAttributeRepository = new Mock<IOfferAttributesRepository>(MockBehavior.Loose).Object;
+
+        var appVersionService = new Mock<IAppVersionService>();
+        appVersionService.SetupGet(s => s.Version).Returns("test-1.0.0");
+
+        var gitReleases = new Mock<ISAGitReleasesService>();
+        gitReleases.Setup(g => g.GetLatestReleaseFromGitHub()).Returns(string.Empty);
+
+        var clientLogger = new SaaSClientLogger<HomeController>();
+
+        var controller = new HomeController(
+            usersRepository: usersRepo,
+            billingApiService: billingApiService,
+            subscriptionRepo: subscriptionsRepo,
+            planRepository: plansRepo,
+            subscriptionUsageLogsRepository: subscriptionUsageLogsRepository,
+            dimensionsRepository: dimensionsRepository,
+            subscriptionLogsRepo: subscriptionLogsRepo,
+            applicationConfigRepository: appConfigRepo,
+            userRepository: usersRepo,
+            fulfillApiService: fulfillmentApiService,
+            applicationLogRepository: applicationLogRepo,
+            emailTemplateRepository: emailTemplateRepository,
+            planEventsMappingRepository: planEventsMappingRepository,
+            eventsRepository: eventsRepository,
+            saaSApiClientConfiguration: sdkConfig,
+            loggerFactory: loggerFactory,
+            emailService: emailService,
+            offersRepository: offersRepo,
+            offersAttributeRepository: offersAttributeRepository,
+            appVersionService: appVersionService.Object,
+            sAGitReleasesService: gitReleases.Object,
+            logger: clientLogger);
+
+        var identity = new ClaimsIdentity(
+            new[] { new Claim(EmailClaimType, AdminEmail) },
+            authenticationType: "TestAuth");
+        var principal = new ClaimsPrincipal(identity);
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = principal },
+        };
+
+        return new Built(controller, ctx, applicationLogRepo, capturedLogs);
+    }
+
     /// <summary>Bundle of objects the property test needs after building the harness.</summary>
     public sealed record Built(
         HomeController Controller,

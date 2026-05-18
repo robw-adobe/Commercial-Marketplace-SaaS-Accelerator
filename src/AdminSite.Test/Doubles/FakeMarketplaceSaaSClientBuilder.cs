@@ -215,6 +215,17 @@ public sealed class FakeMarketplaceSaaSClientBuilder
             });
     }
 
+    // AadIdentifier and SubscriptionTerm have internal constructors; use reflection.
+    private static readonly ConstructorInfo AadIdentifierCtor =
+        typeof(AadIdentifier)
+            .GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
+            .Single(c => c.GetParameters().Length == 4);
+
+    private static readonly ConstructorInfo SubscriptionTermCtor =
+        typeof(SubscriptionTerm)
+            .GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
+            .Single(c => c.GetParameters().Length == 4);
+
     /// <summary>
     /// Construct a minimal <see cref="Subscription"/> populated with just an id.
     /// Useful for tests that only care about iteration shape.
@@ -233,6 +244,80 @@ public sealed class FakeMarketplaceSaaSClientBuilder
         args[0] = (Guid?)id;
         // Remaining parameters default to null/0; Activator-style population.
         for (int i = 1; i < ctorParams.Length; i++)
+        {
+            var pt = ctorParams[i].ParameterType;
+            args[i] = pt.IsValueType && Nullable.GetUnderlyingType(pt) is null
+                ? Activator.CreateInstance(pt)
+                : null;
+        }
+
+        return (Subscription)SubscriptionParameterisedCtor.Invoke(args);
+    }
+
+    /// <summary>
+    /// Construct a fully-populated <see cref="Subscription"/> that passes through
+    /// <see cref="Marketplace.SaaS.Accelerator.Services.Helpers.ConversionHelper.subscriptionResult"/>
+    /// without throwing. All required fields (Purchaser.ObjectId, Purchaser.TenantId,
+    /// Beneficiary.EmailId, Beneficiary.ObjectId, Beneficiary.TenantId, and Term) are
+    /// populated.
+    /// </summary>
+    /// <param name="id">The subscription Guid.</param>
+    /// <param name="offerId">The offer id string (e.g. "offer-00001").</param>
+    /// <param name="planId">The plan id string (e.g. "plan-alpha").</param>
+    /// <param name="status">The subscription status.</param>
+    /// <param name="quantity">The seat quantity.</param>
+    /// <param name="beneficiaryEmail">Beneficiary / customer email.</param>
+    public static Subscription CreateFullSubscription(
+        Guid id,
+        string offerId,
+        string planId,
+        SubscriptionStatusEnum status,
+        int quantity,
+        string beneficiaryEmail)
+    {
+        // AadIdentifier(string emailId, Guid? objectId, Guid? tenantId, string puid)
+        var beneficiary = (AadIdentifier)AadIdentifierCtor.Invoke(new object[]
+        {
+            beneficiaryEmail,
+            (Guid?)Guid.NewGuid(),
+            (Guid?)Guid.NewGuid(),
+            (string)null,
+        });
+
+        var purchaser = (AadIdentifier)AadIdentifierCtor.Invoke(new object[]
+        {
+            (string)null,
+            (Guid?)Guid.NewGuid(),
+            (Guid?)Guid.NewGuid(),
+            (string)null,
+        });
+
+        // SubscriptionTerm(TermUnitEnum? termUnit, DateTimeOffset? startDate, DateTimeOffset? endDate, string chargeDuration)
+        var term = (SubscriptionTerm)SubscriptionTermCtor.Invoke(new object[]
+        {
+            (TermUnitEnum?)TermUnitEnum.P1M,
+            (DateTimeOffset?)DateTimeOffset.UtcNow,
+            (DateTimeOffset?)DateTimeOffset.UtcNow.AddMonths(1),
+            (string)null,
+        });
+
+        var ctorParams = SubscriptionParameterisedCtor.GetParameters();
+        var args = new object[ctorParams.Length];
+        // Position order: id, publisherId, offerId, name, saasSubscriptionStatus,
+        //                 beneficiary, purchaser, planId, quantity, term, ...
+        args[0] = (Guid?)id;
+        args[1] = "test-publisher";
+        args[2] = offerId;
+        args[3] = $"sub-{id:N}";
+        args[4] = (SubscriptionStatusEnum?)status;
+        args[5] = beneficiary;
+        args[6] = purchaser;
+        args[7] = planId;
+        args[8] = (int?)quantity;
+        args[9] = term;
+        // Remaining args: autoRenew, isTest, isFreeTrial, allowedCustomerOperations,
+        //                 sandboxType, created, sessionMode — all null.
+        for (int i = 10; i < ctorParams.Length; i++)
         {
             var pt = ctorParams[i].ParameterType;
             args[i] = pt.IsValueType && Nullable.GetUnderlyingType(pt) is null
