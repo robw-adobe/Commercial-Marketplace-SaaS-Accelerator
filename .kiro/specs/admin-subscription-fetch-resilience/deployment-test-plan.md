@@ -158,6 +158,10 @@ will otherwise cost you time.**
   mounted file share so the installed SDK files survive, but `PATH`, the alias,
   and `DOTNET_ROOT` do not. If your session drops, re-run the four export/alias
   lines (4b) before continuing — you do not need to reinstall.
+- **The MeteredTriggerJob publish needs `-p:PublishReadyToRun=false` in Cloud
+  Shell.** Its project enables ReadyToRun (AOT via crossgen2), which is
+  OOM-killed in the memory-constrained Cloud Shell container (exit 137 /
+  `NETSDK1096`). The flag is already baked into the build command in 4d.
 - The canonical installer URL is `https://dot.net/v1/dotnet-install.sh`. The
   older `dotnet.microsoft.com/.../scripts/v1/...` path no longer resolves.
 
@@ -220,10 +224,17 @@ cd ./Commercial-Marketplace-SaaS-Accelerator
 dotnet publish ./src/AdminSite/AdminSite.csproj `
   -v q -c release -o ./Publish/AdminSite/
 
+# MeteredTriggerJob: -p:PublishReadyToRun=false is REQUIRED in Cloud Shell.
+# The project sets PublishReadyToRun=true, which runs crossgen2 (AOT). crossgen2
+# exceeds the Cloud Shell container memory limit and is OOM-killed (exit code
+# 137 / NETSDK1096). R2R is only a startup optimization; disabling it produces
+# a functionally identical WebJob. If it is still OOM-killed, also append
+# -p:PublishSingleFile=false (Azure runs the resulting .exe either way).
 dotnet publish ./src/MeteredTriggerJob/MeteredTriggerJob.csproj `
   -c release `
   -o ./Publish/AdminSite/app_data/jobs/triggered/MeteredTriggerJob/ `
-  --runtime win-x64 --self-contained true
+  --runtime win-x64 --self-contained true `
+  -p:PublishReadyToRun=false
 
 dotnet publish ./src/CustomerSite/CustomerSite.csproj `
   -v q -c release -o ./Publish/CustomerSite/
