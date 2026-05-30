@@ -87,6 +87,98 @@ Staging URLs (production unchanged):
 
 ---
 
+## Phase 2a — Slot prerequisites (Key Vault access + redirect URIs)
+
+A new staging slot does **not** fully inherit two things from production, and
+both cause hard failures (HTTP 500, then a sign-in error) if skipped. Do this
+before deploying.
+
+### 2a.1 — Grant the slot's managed identity access to Key Vault
+
+The `DefaultConnection` connection string is a Key Vault reference
+(`@Microsoft.KeyVault(VaultName=Adobe-Marketplace-kv;SecretName=DefaultConnection)`).
+Key Vault references resolve using the app's **managed identity**, and **each
+slot has its own separate identity**. The slot copies the reference *value* but
+not vault access, so the reference fails to resolve and the literal
+`@Microsoft.KeyVault(...)` string is passed to SqlClient, producing:
+
+```text
+ArgumentException: Keyword not supported: '@microsoft.keyvault(vaultname'.
+```
+
+Every page 500s because the first DB query throws. Fix: grant each slot's
+identity `get`/`list` secret access. Run one line at a time and substitute the
+printed principal ID into the `set-policy` command.
+
+Admin slot:
+
+```powershell
+az webapp identity assign --resource-group Adobe-Marketplace --name Adobe-Marketplace-admin --slot staging --query principalId -o tsv
+```
+
+```powershell
+az keyvault set-policy --name Adobe-Marketplace-kv --object-id <admin-staging-principalId> --secret-permissions get list
+```
+
+```powershell
+az webapp restart --resource-group Adobe-Marketplace --name Adobe-Marketplace-admin --slot staging
+```
+
+Portal slot:
+
+```powershell
+az webapp identity assign --resource-group Adobe-Marketplace --name Adobe-Marketplace-portal --slot staging --query principalId -o tsv
+```
+
+```powershell
+az keyvault set-policy --name Adobe-Marketplace-kv --object-id <portal-staging-principalId> --secret-permissions get list
+```
+
+```powershell
+az webapp restart --resource-group Adobe-Marketplace --name Adobe-Marketplace-portal --slot staging
+```
+
+> This vault uses the access-policy model (`enableRbacAuthorization = false`),
+> so `set-policy` is correct. If a future vault returns `true` for
+> `az keyvault show --name Adobe-Marketplace-kv --query "properties.enableRbacAuthorization" -o tsv`,
+> grant the `Key Vault Secrets User` role with `az role assignment create`
+> instead.
+
+### 2a.2 — Add the staging redirect URIs to the app registration
+
+Both sites authenticate through one Entra app registration
+(`9e7221af-fa46-42d0-b2c7-235ca0a5c06f`, the `MTClientId`). It only lists the
+production hostnames, so signing in on a `*-staging` host fails with:
+
+```text
+AADSTS50011: The redirect URI '.../Home/Index' specified in the request does
+not match the redirect URIs configured for the application.
+```
+
+`az ad app update --web-redirect-uris` **overwrites** the entire list, so the
+command below repeats all 8 production URIs and appends the 8 staging ones
+(4 each for admin and portal, matching the existing base / `/` / `/Home/Index`
+/ `/Home/Index/` pattern). Run as a single line:
+
+```powershell
+az ad app update --id 9e7221af-fa46-42d0-b2c7-235ca0a5c06f --web-redirect-uris "https://Adobe-Marketplace-admin.azurewebsites.net/Home/Index/" "https://Adobe-Marketplace-admin.azurewebsites.net/Home/Index" "https://Adobe-Marketplace-admin.azurewebsites.net/" "https://Adobe-Marketplace-admin.azurewebsites.net" "https://Adobe-Marketplace-portal.azurewebsites.net/Home/Index/" "https://Adobe-Marketplace-portal.azurewebsites.net/Home/Index" "https://Adobe-Marketplace-portal.azurewebsites.net/" "https://Adobe-Marketplace-portal.azurewebsites.net" "https://Adobe-Marketplace-admin-staging.azurewebsites.net/Home/Index/" "https://Adobe-Marketplace-admin-staging.azurewebsites.net/Home/Index" "https://Adobe-Marketplace-admin-staging.azurewebsites.net/" "https://Adobe-Marketplace-admin-staging.azurewebsites.net" "https://Adobe-Marketplace-portal-staging.azurewebsites.net/Home/Index/" "https://Adobe-Marketplace-portal-staging.azurewebsites.net/Home/Index" "https://Adobe-Marketplace-portal-staging.azurewebsites.net/" "https://Adobe-Marketplace-portal-staging.azurewebsites.net"
+```
+
+Verify all 16 are present (no app restart needed — Entra picks up the change
+within a minute):
+
+```powershell
+az ad app show --id 9e7221af-fa46-42d0-b2c7-235ca0a5c06f --query "web.redirectUris" -o json
+```
+
+> Editing this registration requires Application Administrator rights (or
+> ownership of the app). If you do not have them, the URI additions must be
+> done by someone who does. First confirm the current list before overwriting:
+> if production has more or different URIs than the 8 shown here, capture them
+> and include them in the command so none are dropped.
+
+---
+
 ## Phase 3 — Add resilience config to staging slots
 
 This PR introduces a `MarketplaceResilience` configuration section.
@@ -328,12 +420,46 @@ Open: `https://Adobe-Marketplace-portal-staging.azurewebsites.net`
 **If any check fails:** stop here, do not swap. Check the log stream,
 fix the issue, re-deploy to the staging slot, and retest.
 
+**Debugging a 500 on staging:** the IIS error page hides the real exception.
+To see the actual stack trace, temporarily switch the slot to the developer
+exception page, restart, and reload:
+
+```powershell
+az webapp config appsettings set --resource-group Adobe-Marketplace --name Adobe-Marketplace-admin --slot staging --settings "ASPNETCORE_ENVIRONMENT=Development" "ASPNETCORE_DETAILEDERRORS=true"
+```
+
+```powershell
+az webapp restart --resource-group Adobe-Marketplace --name Adobe-Marketplace-admin --slot staging
+```
+
+This is safe on staging (no production traffic), but **must be reverted before
+the Phase 6 swap** — see Phase 6 step 1. The two most common staging-only
+failures (Key Vault reference and redirect URI) are both addressed in Phase 2a.
+
 ---
 
 ## Phase 6 — Swap staging to production
 
-Once all Phase 5 checks pass, execute the swap. Each swap takes ~30 seconds
-with zero downtime — Azure warms up the new code before flipping traffic.
+### 6.1 — Revert any diagnostic settings first
+
+If you set `ASPNETCORE_ENVIRONMENT=Development` while debugging Phase 5, remove
+it now. Swapping it into production would expose detailed error pages to live
+users. Skip this entirely if you never set it.
+
+```powershell
+az webapp config appsettings delete --resource-group Adobe-Marketplace --name Adobe-Marketplace-admin --slot staging --setting-names ASPNETCORE_ENVIRONMENT ASPNETCORE_DETAILEDERRORS
+```
+
+Deleting an app setting restarts the slot automatically — no separate restart
+command is needed. Wait ~30 seconds, reload the staging URL once to confirm it
+still loads cleanly, then swap.
+
+### 6.2 — Swap
+
+Once all Phase 5 checks pass, execute the swap. The swap itself is fast
+(~30 seconds) and zero-downtime: Azure applies the target config to the
+already-warm staging instances and only flips routing once they respond, so
+users never hit a cold start.
 
 ```powershell
 az webapp deployment slot swap `
@@ -457,6 +583,7 @@ az appservice plan update `
 | 0 | Pre-flight checks | 5 min | None |
 | 1 | Scale to S1 | 2 min | None |
 | 2 | Create staging slots | 3 min | None |
+| 2a | Slot prerequisites (Key Vault + redirect URIs) | 5 min | None |
 | 3 | Add config to staging | 3 min | None |
 | 4 | Build and deploy to staging | 10 min | None |
 | 5 | Test staging | 15–30 min | None |
