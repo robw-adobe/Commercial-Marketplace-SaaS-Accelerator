@@ -353,7 +353,7 @@ public class CorePreservationPropertyTests
     {
         try
         {
-            return harness.Controller.FetchAllSubscriptions();
+            return harness.Controller.FetchAllSubscriptions().GetAwaiter().GetResult();
         }
         catch (Exception)
         {

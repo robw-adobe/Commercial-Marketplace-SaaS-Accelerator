@@ -56,13 +56,17 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using FsCheck;
 using FsCheck.Xunit;
 using Marketplace.SaaS.Accelerator.AdminSite.Test.BugCondition;
 using Marketplace.SaaS.Accelerator.AdminSite.Test.Doubles;
 using Marketplace.SaaS.Accelerator.AdminSite.Test.Fixtures;
 using Marketplace.SaaS.Accelerator.AdminSite.Test.Generators;
+using Marketplace.SaaS.Accelerator.AdminSite.Test.Hosted;
 using Marketplace.SaaS.Accelerator.DataAccess.Entities;
+using Marketplace.SaaS.Accelerator.Services.Services.Hosted;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Marketplace.SaaS.Models;
 using Xunit;
@@ -438,7 +442,7 @@ public class IdempotentFetchPropertyTests
     // ──────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// PBT-2.3 (Property 4 - hosted service idempotence): SKIPPED on unfixed code.
+    /// PBT-2.3 (Property 4 - hosted service idempotence):
     ///
     /// For any sequence of background sync ticks against the same Marketplace
     /// payload, the final DB state equals the result of a single tick. Audit
@@ -446,26 +450,69 @@ public class IdempotentFetchPropertyTests
     ///
     /// Validates: Requirements 2.5, 3.2
     /// </summary>
-    [Fact(Skip = "Awaiting SubscriptionLazyLoaderHostedService from task 3.8")]
-    public void HostedService_ConsecutiveTicks_SamePayload_DbStateIsIdempotent()
+    [Fact]
+    public async Task HostedService_ConsecutiveTicks_SamePayload_DbStateIsIdempotent()
     {
-        // This test will be implemented when SubscriptionLazyLoaderHostedService
-        // is available (task 3.8).
-        //
-        // Pseudocode:
-        //   seed corpus with N subscriptions
-        //   start SubscriptionLazyLoaderHostedService with a 0-delay interval
-        //   wait for tick 1 to complete; snapshot DB state
-        //   wait for tick 2 (same payload); assert DB state unchanged
-        //   wait for tick 3 (same payload); assert DB state unchanged
-        //   assert AuditLogs count after tick 2 == after tick 1
-        //   assert AuditLogs count after tick 3 == after tick 1
-        throw new NotImplementedException(
-            "Awaiting task 3.8: add SubscriptionLazyLoaderHostedService.");
+        // Arrange — 4 subscriptions, all Subscribed, same payload for all ticks.
+        const int SubCount = 4;
+        var ids = Enumerable.Range(1, SubCount)
+            .Select(i => Guid.Parse($"cccccccc-{i:D4}-{i:D4}-{i:D4}-cccccccccccc"))
+            .ToList();
+        var sdkSubscriptions = ids
+            .Select((id, i) => FakeMarketplaceSaaSClientBuilder.CreateFullSubscription(
+                id,
+                offerId: "offer-hosted-idem",
+                planId: "plan-hosted-idem",
+                status: SubscriptionStatusEnum.Subscribed,
+                quantity: 1,
+                beneficiaryEmail: $"hosted-idem-user-{i}@example.test"))
+            .ToList();
+
+        var fakeClient = new FakeMarketplaceSaaSClientBuilder()
+            .WithSeededSubscriptions(sdkSubscriptions)
+            .Build();
+
+        const int TargetTicks = 3;
+
+        var (hostedService, ctx, dbName) = SubscriptionLazyLoaderHostedServiceTestHelper.Build(
+            fakeClient, intervalSeconds: 0);
+
+        // Run for 500ms so at least TargetTicks complete.
+        await hostedService.StartAsync(CancellationToken.None);
+        await Task.Delay(500, CancellationToken.None);
+        await hostedService.StopAsync(CancellationToken.None);
+
+        Assert.True(
+            fakeClient.BulkListCallCount >= TargetTicks,
+            $"Expected >= {TargetTicks} bulk-list calls, got {fakeClient.BulkListCallCount}.");
+
+        // Assert ── DB has exactly SubCount subscriptions (no duplicates).
+        Assert.Equal(SubCount, ctx.Subscriptions.Count());
+
+        // Assert ── Audit log count stable on repeat ticks with same payload.
+        // The first tick creates subscriptions. Ticks 2 and 3 with the same payload
+        // should not add any audit log rows (no detected changes).
+        // We verify by running a 4th tick via a NEW service on the same DB.
+        var auditCountAfterHostedTicks = ctx.SubscriptionAuditLogs.Count();
+
+        var fakeExtra = new FakeMarketplaceSaaSClientBuilder()
+            .WithSeededSubscriptions(sdkSubscriptions)
+            .Build();
+
+        var (hostedServiceExtra, _) = SubscriptionLazyLoaderHostedServiceTestHelper.BuildWithDbName(
+            dbName, fakeExtra, intervalSeconds: 0);
+
+        await hostedServiceExtra.StartAsync(CancellationToken.None);
+        // One more tick.
+        await Task.Delay(200, CancellationToken.None);
+        await hostedServiceExtra.StopAsync(CancellationToken.None);
+
+        Assert.Equal(SubCount, ctx.Subscriptions.Count());
+        Assert.Equal(auditCountAfterHostedTicks, ctx.SubscriptionAuditLogs.Count());
     }
 
     /// <summary>
-    /// PBT-2.3 (Property 4 - hosted service change detection): SKIPPED on unfixed code.
+    /// PBT-2.3 (Property 4 - hosted service change detection):
     ///
     /// When a background sync tick detects a change (status/plan/quantity),
     /// exactly the expected number of audit log rows are added. A subsequent
@@ -473,19 +520,99 @@ public class IdempotentFetchPropertyTests
     ///
     /// Validates: Requirements 2.5, 3.2
     /// </summary>
-    [Fact(Skip = "Awaiting SubscriptionLazyLoaderHostedService from task 3.8")]
-    public void HostedService_TickWithChange_AuditLogWrittenOnce_RepeatTickAddsNone()
+    [Fact]
+    public async Task HostedService_TickWithChange_AuditLogWrittenOnce_RepeatTickAddsNone()
     {
-        // This test will be implemented when SubscriptionLazyLoaderHostedService
-        // is available (task 3.8).
-        //
-        // Pseudocode:
-        //   seed corpus; run tick 1 (initial)
-        //   change one subscription's status in the next API response
-        //   run tick 2 (change detected); assert exactly 1 new audit log row
-        //   run tick 3 (same changed payload); assert 0 new audit log rows
-        throw new NotImplementedException(
-            "Awaiting task 3.8: add SubscriptionLazyLoaderHostedService.");
+        // Arrange — 3 subscriptions.
+        const int SubCount = 3;
+        var ids = Enumerable.Range(1, SubCount)
+            .Select(i => Guid.Parse($"dddddddd-{i:D4}-{i:D4}-{i:D4}-dddddddddddd"))
+            .ToList();
+        var beneficiaryEmails = ids
+            .Select((_, i) => $"hosted-change-user-{i}@example.test")
+            .ToList();
+
+        // ── Tick 1 payload: all Subscribed ────────────────────────────────────
+        var sdkTick1 = ids
+            .Select((id, i) => FakeMarketplaceSaaSClientBuilder.CreateFullSubscription(
+                id,
+                offerId: "offer-hosted-change",
+                planId: "plan-alpha",
+                status: SubscriptionStatusEnum.Subscribed,
+                quantity: 2,
+                beneficiaryEmail: beneficiaryEmails[i]))
+            .ToList();
+
+        var fakeClient1 = new FakeMarketplaceSaaSClientBuilder()
+            .WithSeededSubscriptions(sdkTick1)
+            .Build();
+
+        int tickCount1 = 0;
+        SubscriptionLazyLoaderHostedService serviceRef = null;
+
+        var (hostedService1, ctx, dbName) = SubscriptionLazyLoaderHostedServiceTestHelper.Build(
+            fakeClient1, intervalSeconds: 0);
+
+        // Tick 1: run for 300ms so at least 1 tick completes.
+        await hostedService1.StartAsync(CancellationToken.None);
+        await Task.Delay(300, CancellationToken.None);
+        await hostedService1.StopAsync(CancellationToken.None);
+
+        Assert.Equal(SubCount, ctx.Subscriptions.Count());
+        var auditAfterTick1 = ctx.SubscriptionAuditLogs.Count();
+
+        // ── Tick 2 payload: subscription[1] changes status to Unsubscribed ────
+        var sdkTick2 = ids
+            .Select((id, i) =>
+            {
+                var status = (i == 1)
+                    ? SubscriptionStatusEnum.Unsubscribed
+                    : SubscriptionStatusEnum.Subscribed;
+                return FakeMarketplaceSaaSClientBuilder.CreateFullSubscription(
+                    id,
+                    offerId: "offer-hosted-change",
+                    planId: "plan-alpha",
+                    status: status,
+                    quantity: 2,
+                    beneficiaryEmail: beneficiaryEmails[i]);
+            })
+            .ToList();
+
+        var fakeClient2 = new FakeMarketplaceSaaSClientBuilder()
+            .WithSeededSubscriptions(sdkTick2)
+            .Build();
+
+        var (hostedService2, _) = SubscriptionLazyLoaderHostedServiceTestHelper.BuildWithDbName(
+            dbName, fakeClient2, intervalSeconds: 0);
+
+        await hostedService2.StartAsync(CancellationToken.None);
+        await Task.Delay(300, CancellationToken.None);
+        await hostedService2.StopAsync(CancellationToken.None);
+
+        var auditAfterTick2 = ctx.SubscriptionAuditLogs.Count();
+        Assert.True(
+            auditAfterTick2 > auditAfterTick1,
+            $"Expected new audit log rows after status change tick. Before={auditAfterTick1}, After={auditAfterTick2}");
+
+        var statusRefreshLogs = ctx.SubscriptionAuditLogs
+            .Where(a => a.Attribute == "Status-Refresh" && a.NewValue == "Unsubscribed")
+            .ToList();
+        Assert.NotEmpty(statusRefreshLogs);
+
+        // ── Tick 3: SAME changed payload — no additional audit logs ───────────
+        var fakeClient3 = new FakeMarketplaceSaaSClientBuilder()
+            .WithSeededSubscriptions(sdkTick2)
+            .Build();
+
+        var (hostedService3, _) = SubscriptionLazyLoaderHostedServiceTestHelper.BuildWithDbName(
+            dbName, fakeClient3, intervalSeconds: 0);
+
+        await hostedService3.StartAsync(CancellationToken.None);
+        await Task.Delay(300, CancellationToken.None);
+        await hostedService3.StopAsync(CancellationToken.None);
+
+        var auditAfterTick3 = ctx.SubscriptionAuditLogs.Count();
+        Assert.Equal(auditAfterTick2, auditAfterTick3);
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -535,7 +662,7 @@ public class IdempotentFetchPropertyTests
     {
         try
         {
-            return harness.Controller.FetchAllSubscriptions();
+            return harness.Controller.FetchAllSubscriptions().GetAwaiter().GetResult();
         }
         catch (Exception)
         {

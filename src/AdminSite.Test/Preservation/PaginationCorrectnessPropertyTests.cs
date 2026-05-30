@@ -254,7 +254,7 @@ public class PaginationCorrectnessPropertyTests
     // ──────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// PBT-2.2 (Property 3 - pagination correctness): SKIPPED on unfixed code.
+    /// PBT-2.2 (Property 3 - pagination correctness).
     ///
     /// For random (pageIndex, pageSize) and random subscription corpora:
     ///   - concat(GetPaged(1..N, pageSize)).Items equals Get() ordering
@@ -262,92 +262,196 @@ public class PaginationCorrectnessPropertyTests
     ///
     /// Validates: Requirements 2.3, 3.4
     /// </summary>
-    [Fact(Skip = "Awaiting paginated repo from task 3.4")]
-    public void GetPaged_ConcatenatedPages_EqualsGetOrdering()
+    [Property(MaxTest = 50, EndSize = 50)]
+    public Property GetPaged_ConcatenatedPages_EqualsGetOrdering(SubscriptionCorpus corpus)
     {
-        // This test will be implemented when GetPaged is available (task 3.4).
-        //
-        // Pseudocode for the full property:
-        //
-        //   for pageSize in {1, 5, 10, 50, 100} do
-        //     seed corpus with N subscriptions
-        //     fullList = repo.Get().ToList()
-        //     pages = []
-        //     pageIndex = 1
-        //     while true do
-        //       page = repo.GetPaged(pageIndex, pageSize)
-        //       assert page.TotalCount == N
-        //       pages.Add(page.Items)
-        //       if page.Items.Count < pageSize then break
-        //       pageIndex++
-        //     concatenated = pages.SelectMany(p => p).ToList()
-        //     assert concatenated.Select(s => s.AmpsubscriptionId)
-        //            == fullList.Select(s => s.AmpsubscriptionId)
-        //
-        // The property-based version randomises both N and pageSize over their
-        // valid domains to confirm the concatenation invariant holds universally.
-        throw new NotImplementedException("Awaiting task 3.4: add GetPaged to ISubscriptionsRepository.");
+        // Use a selection of page sizes that all divide evenly or have remainders
+        // to exercise boundary conditions.
+        int[] pageSizes = { 1, 5, 10, 100 };
+
+        foreach (int pageSize in pageSizes)
+        {
+            var ctx = InMemorySaasKitContextFactory.CreateAndSeed(corpus);
+            var repo = new SubscriptionsRepository(ctx);
+
+            var fullList = repo.Get().Select(s => s.AmpsubscriptionId).ToList();
+            int totalCount = corpus.Subscriptions.Count;
+
+            // Collect all pages by stepping through page index until we have all rows.
+            var concatenated = new List<Guid>();
+            int pageIndex = 1;
+            while (true)
+            {
+                var page = repo.GetPaged(pageIndex, pageSize);
+
+                // TotalCount must equal seeded count on every page.
+                if (page.TotalCount != totalCount)
+                {
+                    return false.Label(
+                        $"TotalCount mismatch on page {pageIndex} with pageSize={pageSize}: " +
+                        $"expected={totalCount}, actual={page.TotalCount}");
+                }
+
+                concatenated.AddRange(page.Items.Select(s => s.AmpsubscriptionId));
+
+                if (page.Items.Count < pageSize)
+                {
+                    break; // Last (possibly partial) page reached.
+                }
+
+                pageIndex++;
+            }
+
+            // Concatenated pages must equal the full ordered Get() result.
+            bool equal = concatenated.SequenceEqual(fullList);
+            if (!equal)
+            {
+                return false.Label(
+                    $"Concatenated pages differ from Get() ordering. " +
+                    $"pageSize={pageSize}, corpus={totalCount}, " +
+                    $"concatenated={concatenated.Count}, fullList={fullList.Count}");
+            }
+        }
+
+        return true.Label("All page sizes produced ordering consistent with Get()");
     }
 
     /// <summary>
-    /// PBT-2.2 (Property 3 - TotalCount correctness): SKIPPED on unfixed code.
+    /// PBT-2.2 (Property 3 - TotalCount correctness).
     ///
     /// For any (pageIndex, pageSize) pair, GetPaged.TotalCount equals the seeded count.
     ///
     /// Validates: Requirements 2.3, 3.4
     /// </summary>
-    [Fact(Skip = "Awaiting paginated repo from task 3.4")]
-    public void GetPaged_TotalCount_EqualsSeededCount()
+    [Property(MaxTest = 50, EndSize = 50)]
+    public Property GetPaged_TotalCount_EqualsSeededCount(SubscriptionCorpus corpus)
     {
-        // This test will be verified when GetPaged is available (task 3.4).
-        //
-        // Pseudocode:
-        //   for any pageIndex, pageSize, and corpus size N:
-        //     page = repo.GetPaged(pageIndex, pageSize)
-        //     assert page.TotalCount == N
-        //
-        // Because TotalCount must be consistent across all pages, any single
-        // call is sufficient to verify it — the PBT version samples many (N, pi, ps) triples.
-        throw new NotImplementedException("Awaiting task 3.4: add GetPaged to ISubscriptionsRepository.");
+        var ctx = InMemorySaasKitContextFactory.CreateAndSeed(corpus);
+        var repo = new SubscriptionsRepository(ctx);
+        int expected = corpus.Subscriptions.Count;
+
+        // Sample a few different (pageIndex, pageSize) combinations to confirm
+        // TotalCount is independent of the specific page requested.
+        var pairs = new[] { (1, 1), (1, 10), (2, 5), (100, 100) };
+        foreach (var (pi, ps) in pairs)
+        {
+            var page = repo.GetPaged(pi, ps);
+            if (page.TotalCount != expected)
+            {
+                return false.Label(
+                    $"TotalCount mismatch: pageIndex={pi}, pageSize={ps}, " +
+                    $"expected={expected}, actual={page.TotalCount}");
+            }
+        }
+
+        return true.Label($"TotalCount=={expected} for all sampled (pageIndex,pageSize) pairs");
     }
 
     /// <summary>
-    /// PBT-2.2 (Property 3 - clamping): SKIPPED on unfixed code.
+    /// PBT-2.2 (Property 3 - clamping).
     ///
     /// GetPaged clamps pageIndex &lt; 1 to 1 and pageSize &lt; 1 to 1.
     ///
     /// Validates: Requirements 2.3, 3.4
     /// </summary>
-    [Fact(Skip = "Awaiting paginated repo from task 3.4")]
+    [Fact]
     public void GetPaged_WithZeroOrNegativePageIndexOrSize_ClampsToOne()
     {
-        // This test will be verified when GetPaged is available (task 3.4).
-        //
-        // Pseudocode:
-        //   assert GetPaged(0, 10).PageIndex == 1
-        //   assert GetPaged(-5, 10).PageIndex == 1
-        //   assert GetPaged(1, 0).PageSize == 1
-        //   assert GetPaged(1, -3).PageSize == 1
-        throw new NotImplementedException("Awaiting task 3.4: add GetPaged to ISubscriptionsRepository.");
+        // Arrange: seed a small corpus so the results are non-trivial.
+        var subscriptions = Enumerable.Range(1, 5).Select(i => new Subscriptions
+        {
+            AmpsubscriptionId = Guid.NewGuid(),
+            Name = $"sub-{i}",
+            AmpplanId = "plan-a",
+            AmpOfferId = "offer-a",
+            SubscriptionStatus = "Subscribed",
+            IsActive = true,
+            CreateBy = 1,
+            CreateDate = DateTime.UtcNow.AddMinutes(-i),
+            ModifyDate = DateTime.UtcNow,
+            Ampquantity = 1,
+        }).ToList();
+
+        var ctx = InMemorySaasKitContextFactory.Create();
+        ctx.Database.EnsureCreated();
+        ctx.Subscriptions.AddRange(subscriptions);
+        ctx.SaveChanges();
+        var repo = new SubscriptionsRepository(ctx);
+
+        // pageIndex = 0 → clamped to 1
+        var page0 = repo.GetPaged(0, 10);
+        Assert.Equal(1, page0.PageIndex);
+        Assert.Equal(10, page0.PageSize);
+
+        // pageIndex = -5 → clamped to 1
+        var pageNeg = repo.GetPaged(-5, 10);
+        Assert.Equal(1, pageNeg.PageIndex);
+
+        // pageSize = 0 → clamped to 1
+        var size0 = repo.GetPaged(1, 0);
+        Assert.Equal(1, size0.PageSize);
+
+        // pageSize = -3 → clamped to 1
+        var sizeNeg = repo.GetPaged(1, -3);
+        Assert.Equal(1, sizeNeg.PageSize);
+
+        // Clamped page 1 with size 1 returns the first item (highest CreateDate).
+        var firstPage = repo.GetPaged(0, 0);
+        Assert.Equal(1, firstPage.PageIndex);
+        Assert.Equal(1, firstPage.PageSize);
+        Assert.Single(firstPage.Items);
     }
 
     /// <summary>
-    /// PBT-2.2 (Property 3 - User navigation): SKIPPED on unfixed code.
+    /// PBT-2.2 (Property 3 - User navigation).
     ///
     /// GetPaged eagerly loads the User navigation property on each item,
     /// consistent with the existing Get() behaviour.
     ///
     /// Validates: Requirements 2.3, 3.4
     /// </summary>
-    [Fact(Skip = "Awaiting paginated repo from task 3.4")]
+    [Fact]
     public void GetPaged_IncludesUserNavigationProperty()
     {
-        // This test will be verified when GetPaged is available (task 3.4).
-        //
-        // Pseudocode:
-        //   seed corpus with subscriptions whose UserId != null
-        //   page = repo.GetPaged(1, 100)
-        //   assert page.Items.All(s => s.User != null)
-        throw new NotImplementedException("Awaiting task 3.4: add GetPaged to ISubscriptionsRepository.");
+        // Arrange: create a user and subscriptions referencing that user.
+        var user = new Users
+        {
+            UserId = 1,
+            EmailAddress = "testuser@example.test",
+            FullName = "Test User",
+            CreatedDate = DateTime.UtcNow,
+        };
+
+        var subscriptions = Enumerable.Range(1, 3).Select(i => new Subscriptions
+        {
+            AmpsubscriptionId = Guid.NewGuid(),
+            Name = $"sub-{i}",
+            AmpplanId = "plan-a",
+            AmpOfferId = "offer-a",
+            SubscriptionStatus = "Subscribed",
+            IsActive = true,
+            CreateBy = 1,
+            CreateDate = DateTime.UtcNow.AddMinutes(-i),
+            ModifyDate = DateTime.UtcNow,
+            Ampquantity = 1,
+            UserId = user.UserId,
+            PurchaserEmail = user.EmailAddress,
+        }).ToList();
+
+        var ctx = InMemorySaasKitContextFactory.Create();
+        ctx.Database.EnsureCreated();
+        ctx.Users.Add(user);
+        ctx.Subscriptions.AddRange(subscriptions);
+        ctx.SaveChanges();
+
+        var repo = new SubscriptionsRepository(ctx);
+
+        // Act
+        var page = repo.GetPaged(1, 100);
+
+        // Assert: all items with a UserId must have the User navigation property loaded.
+        Assert.Equal(3, page.Items.Count);
+        Assert.All(page.Items, s => Assert.NotNull(s.User));
+        Assert.All(page.Items, s => Assert.Equal("testuser@example.test", s.User.EmailAddress));
     }
 }

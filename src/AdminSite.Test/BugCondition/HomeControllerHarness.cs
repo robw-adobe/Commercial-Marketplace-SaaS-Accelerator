@@ -15,13 +15,16 @@ using Marketplace.SaaS.Accelerator.DataAccess.Services;
 using Marketplace.SaaS.Accelerator.Services.Configurations;
 using Marketplace.SaaS.Accelerator.Services.Contracts;
 using Marketplace.SaaS.Accelerator.Services.Services;
+using Marketplace.SaaS.Accelerator.Services.Services.Resilience;
 using Marketplace.SaaS.Accelerator.Services.Utilities;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 using ContractsILogger = Marketplace.SaaS.Accelerator.Services.Contracts.ILogger;
 using ExtensionsILogger = Microsoft.Extensions.Logging.ILogger;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Marketplace.SaaS.Accelerator.AdminSite.Test.BugCondition;
 
@@ -103,13 +106,30 @@ internal static class HomeControllerHarness
             FulFillmentAPIVersion = "2018-08-31",
         };
 
-        // Construct the production FulfillmentApiService over the fake client.
+        // Construct the production FulfillmentApiService over the fake client,
+        // then wrap it with the Polly resilience decorator so retry/circuit-
+        // breaker logic fires during the property test (task 3.9).
         var capturedLogs = new CapturedLoggerSink();
         var fulfillmentLogger = new SinkBackedContractsILogger(capturedLogs);
-        var fulfillmentApiService = new FulfillmentApiService(
+        var innerFulfillmentApiService = new FulfillmentApiService(
             fakeClient.Client,
             sdkConfig,
             fulfillmentLogger);
+
+        // Build the resilience pipeline with no real delays in tests by using
+        // options with BaseDelaySeconds=0.  The circuit-breaker thresholds match
+        // the defaults (ConsecutiveFailureThreshold=5, MaxRetries=3).
+        var resilienceOptionsValue = new MarketplaceResilienceOptions
+        {
+            MaxRetries = 3,
+            BaseDelaySeconds = 0,         // no real waits in tests
+            ConsecutiveFailureThreshold = 5,
+            CooldownSeconds = 1,          // short cooldown so circuit re-opens fast
+            MaxConcurrentPlanFetches = FetchPipelineBugConditionPropertyTests.MaxConcurrentPlanFetches,
+        };
+        var capturedResilienceLogger = new SinkBackedContractsILogger(capturedLogs);
+        var resiliencePipeline = MarketplaceResiliencePolicy.Build(resilienceOptionsValue, capturedResilienceLogger);
+        var fulfillmentApiService = new FulfillmentApiServiceWithPolicy(innerFulfillmentApiService, resiliencePipeline);
 
         var loggerFactory = new CapturedLoggerFactory(capturedLogs);
 
@@ -139,6 +159,18 @@ internal static class HomeControllerHarness
         // unstructured strings on UNFIXED code).
         var clientLogger = new SaaSClientLogger<HomeController>();
 
+        var resilienceOptionsInstance = Microsoft.Extensions.Options.Options.Create(resilienceOptionsValue);
+
+        var pipeline = new SubscriptionFetchPipeline(
+            fulfillApiService: fulfillmentApiService,
+            subscriptionsRepository: subscriptionsRepo,
+            plansRepository: plansRepo,
+            offersRepository: offersRepo,
+            usersRepository: usersRepo,
+            subscriptionLogRepository: subscriptionLogsRepo,
+            options: resilienceOptionsInstance,
+            logger: new SinkBackedTypedLogger<SubscriptionFetchPipeline>(capturedLogs));
+
         var controller = new HomeController(
             usersRepository: usersRepo,
             billingApiService: billingApiService,
@@ -161,6 +193,8 @@ internal static class HomeControllerHarness
             offersAttributeRepository: offersAttributeRepository,
             appVersionService: appVersionService.Object,
             sAGitReleasesService: gitReleases.Object,
+            resilienceOptions: resilienceOptionsInstance,
+            subscriptionFetchPipeline: pipeline,
             logger: clientLogger);
 
         // Wire ControllerContext with an authenticated principal carrying the
@@ -169,10 +203,17 @@ internal static class HomeControllerHarness
             new[] { new Claim(EmailClaimType, AdminEmail) },
             authenticationType: "TestAuth");
         var principal = new ClaimsPrincipal(identity);
+        var httpContext = new DefaultHttpContext { User = principal };
         controller.ControllerContext = new ControllerContext
         {
-            HttpContext = new DefaultHttpContext { User = principal },
+            HttpContext = httpContext,
         };
+
+        // Wire TempData so actions that set/read TempData do not throw
+        // InvalidOperationException / NullReferenceException.
+        controller.TempData = new Microsoft.AspNetCore.Mvc.ViewFeatures.TempDataDictionary(
+            httpContext,
+            Mock.Of<Microsoft.AspNetCore.Mvc.ViewFeatures.ITempDataProvider>());
 
         return new Built(controller, ctx, applicationLogRepo, capturedLogs);
     }
@@ -207,10 +248,24 @@ internal static class HomeControllerHarness
 
         var capturedLogs = new CapturedLoggerSink();
         var fulfillmentLogger = new SinkBackedContractsILogger(capturedLogs);
-        var fulfillmentApiService = new FulfillmentApiService(
+        var innerFulfillmentApiService = new FulfillmentApiService(
             fakeClient.Client,
             sdkConfig,
             fulfillmentLogger);
+
+        // Wrap with Polly resilience policy (same config as Build()).
+        var resilienceOptionsValue2 = new MarketplaceResilienceOptions
+        {
+            MaxRetries = 3,
+            BaseDelaySeconds = 0,
+            ConsecutiveFailureThreshold = 5,
+            CooldownSeconds = 1,
+            MaxConcurrentPlanFetches = FetchPipelineBugConditionPropertyTests.MaxConcurrentPlanFetches,
+        };
+        var resiliencePipeline2 = MarketplaceResiliencePolicy.Build(
+            resilienceOptionsValue2,
+            new SinkBackedContractsILogger(capturedLogs));
+        var fulfillmentApiService = new FulfillmentApiServiceWithPolicy(innerFulfillmentApiService, resiliencePipeline2);
 
         var loggerFactory = new CapturedLoggerFactory(capturedLogs);
 
@@ -230,6 +285,18 @@ internal static class HomeControllerHarness
         gitReleases.Setup(g => g.GetLatestReleaseFromGitHub()).Returns(string.Empty);
 
         var clientLogger = new SaaSClientLogger<HomeController>();
+
+        var resilienceOptionsInstance2 = Microsoft.Extensions.Options.Options.Create(resilienceOptionsValue2);
+
+        var pipeline2 = new SubscriptionFetchPipeline(
+            fulfillApiService: fulfillmentApiService,
+            subscriptionsRepository: subscriptionsRepo,
+            plansRepository: plansRepo,
+            offersRepository: offersRepo,
+            usersRepository: usersRepo,
+            subscriptionLogRepository: subscriptionLogsRepo,
+            options: resilienceOptionsInstance2,
+            logger: new SinkBackedTypedLogger<SubscriptionFetchPipeline>(capturedLogs));
 
         var controller = new HomeController(
             usersRepository: usersRepo,
@@ -253,16 +320,24 @@ internal static class HomeControllerHarness
             offersAttributeRepository: offersAttributeRepository,
             appVersionService: appVersionService.Object,
             sAGitReleasesService: gitReleases.Object,
+            resilienceOptions: resilienceOptionsInstance2,
+            subscriptionFetchPipeline: pipeline2,
             logger: clientLogger);
 
         var identity = new ClaimsIdentity(
             new[] { new Claim(EmailClaimType, AdminEmail) },
             authenticationType: "TestAuth");
         var principal = new ClaimsPrincipal(identity);
+        var httpContext2 = new DefaultHttpContext { User = principal };
         controller.ControllerContext = new ControllerContext
         {
-            HttpContext = new DefaultHttpContext { User = principal },
+            HttpContext = httpContext2,
         };
+
+        // Wire TempData so actions that set/read TempData do not throw.
+        controller.TempData = new Microsoft.AspNetCore.Mvc.ViewFeatures.TempDataDictionary(
+            httpContext2,
+            Mock.Of<Microsoft.AspNetCore.Mvc.ViewFeatures.ITempDataProvider>());
 
         return new Built(controller, ctx, applicationLogRepo, capturedLogs);
     }
@@ -366,5 +441,39 @@ internal static class HomeControllerHarness
         public void Info(string message, Exception ex) => sink.Add(message);
         public void Warn(string message) => sink.Add(message);
         public void Warn(string message, Exception ex) => sink.Add(message);
+    }
+
+    /// <summary>
+    /// Typed <see cref="ILogger{T}"/> backed by <see cref="CapturedLoggerSink"/>
+    /// so log output from services that require <c>ILogger&lt;T&gt;</c>
+    /// (e.g. <see cref="SubscriptionFetchPipeline"/>) is captured for assertions.
+    /// </summary>
+    internal sealed class SinkBackedTypedLogger<T> : ExtensionsILogger, ILogger<T>
+    {
+        private readonly CapturedLoggerSink sink;
+
+        public SinkBackedTypedLogger(CapturedLoggerSink sink) => this.sink = sink;
+
+        public IDisposable BeginScope<TState>(TState state) => NullDisposable.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception exception,
+            Func<TState, Exception, string> formatter)
+        {
+            if (formatter is null) return;
+            var message = formatter(state, exception);
+            sink.Add(message);
+        }
+
+        private sealed class NullDisposable : IDisposable
+        {
+            public static readonly NullDisposable Instance = new();
+            public void Dispose() { }
+        }
     }
 }

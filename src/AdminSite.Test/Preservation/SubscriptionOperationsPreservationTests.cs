@@ -59,6 +59,8 @@ using Marketplace.SaaS.Accelerator.Services.Utilities;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Microsoft.Marketplace.SaaS.Models;
 using Moq;
 using Xunit;
@@ -887,6 +889,18 @@ public class SubscriptionOperationsPreservationTests
 
         var clientLogger = new SaaSClientLogger<HomeController>();
 
+        var resilienceOptionsInstance = Microsoft.Extensions.Options.Options.Create(new MarketplaceResilienceOptions());
+
+        var pipeline = new SubscriptionFetchPipeline(
+            fulfillApiService: fulfillApiService,
+            subscriptionsRepository: subscriptionsRepo,
+            plansRepository: plansRepo,
+            offersRepository: offersRepo,
+            usersRepository: usersRepo,
+            subscriptionLogRepository: subscriptionLogsRepo,
+            options: resilienceOptionsInstance,
+            logger: Microsoft.Extensions.Logging.Abstractions.NullLogger<SubscriptionFetchPipeline>.Instance);
+
         var controller = new HomeController(
             usersRepository: usersRepo,
             billingApiService: billingApiService,
@@ -909,6 +923,8 @@ public class SubscriptionOperationsPreservationTests
             offersAttributeRepository: offersAttributeRepository,
             appVersionService: appVersionService.Object,
             sAGitReleasesService: gitReleases.Object,
+            resilienceOptions: resilienceOptionsInstance,
+            subscriptionFetchPipeline: pipeline,
             logger: clientLogger);
 
         // Wire auth context with admin email

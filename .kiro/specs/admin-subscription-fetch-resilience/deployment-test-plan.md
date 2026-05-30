@@ -132,18 +132,85 @@ az webapp config appsettings set `
 
 Run in Azure Cloud Shell from the home directory.
 
+### 4a. Install the .NET 8 SDK
+
+**Read these notes before running the commands — they cover the gotchas that
+will otherwise cost you time.**
+
+- **Run commands one at a time.** Pasting a multi-line block into Cloud Shell
+  merges lines and silently drops commands, especially around inline `#`
+  comments. The commands below are deliberately split into single lines with
+  no trailing comments. Paste and run each individually.
+- **Cloud Shell is Linux even in PowerShell mode.** Use the bash installer with
+  the OS and architecture forced (`--os linux --architecture x64`). The
+  PowerShell installer (`dotnet-install.ps1`) fails on Linux with
+  `Architecture '' not supported`.
+- **Install into a dedicated directory (`$HOME/dotnet8`), not `$HOME/.dotnet`.**
+  `$HOME/.dotnet` is the .NET CLI home and already contains the system 9.x
+  cache files; installing there causes collisions (a stray Windows `dotnet.exe`
+  from a failed install, no usable Linux host) that are hard to diagnose.
+- **PowerShell caches native-command lookups per session.** After you have run
+  bare `dotnet` once (it resolves to the system 9.x host at `/usr/bin/dotnet`),
+  appending to `$env:PATH` will not change resolution. Pin the binary with
+  `Set-Alias` instead. This is the step that actually makes `dotnet` resolve to
+  8.0.303.
+- **None of this persists across Cloud Shell sessions.** `$HOME` is on a
+  mounted file share so the installed SDK files survive, but `PATH`, the alias,
+  and `DOTNET_ROOT` do not. If your session drops, re-run the four export/alias
+  lines (4b) before continuing — you do not need to reinstall.
+- The canonical installer URL is `https://dot.net/v1/dotnet-install.sh`. The
+  older `dotnet.microsoft.com/.../scripts/v1/...` path no longer resolves.
+
 ```powershell
-# Install .NET SDK
-wget https://dotnet.microsoft.com/download/dotnet/scripts/v1/dotnet-install.sh
-chmod +x dotnet-install.sh
-./dotnet-install.sh -version 8.0.303
-$ENV:PATH="$HOME/.dotnet:$ENV:PATH"
-dotnet --version   # should show 8.0.303
+wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh
+```
 
-# Install EF tools
+```powershell
+bash dotnet-install.sh --version 8.0.303 --install-dir "$HOME/dotnet8" --os linux --architecture x64
+```
+
+### 4b. Point the shell at the new SDK
+
+Run each line separately. The `Set-Alias` line is what defeats PowerShell's
+cached lookup of the system `dotnet`.
+
+```powershell
+Set-Alias dotnet "$HOME/dotnet8/dotnet" -Scope Global
+```
+
+```powershell
+$ENV:DOTNET_ROOT="$HOME/dotnet8"
+```
+
+```powershell
+$ENV:PATH="$HOME/dotnet8:$HOME/dotnet8/tools:$ENV:PATH"
+```
+
+```powershell
+dotnet --version
+```
+
+`dotnet --version` must print `8.0.303`. If it still shows `9.0.313`, confirm
+the binary exists with `Test-Path "$HOME/dotnet8/dotnet"` and that the alias is
+set with `Get-Alias dotnet`.
+
+### 4c. Install EF tools (optional)
+
+This PR has no schema changes, so the EF migration step is not required (see
+the migrations note at the end of this phase). Skip to 4d unless you need
+`dotnet-ef` for another reason.
+
+```powershell
 dotnet tool install --global dotnet-ef --version 8.0.0
-$ENV:PATH="$HOME/.dotnet/tools:$ENV:PATH"
+```
 
+```powershell
+$ENV:PATH="$HOME/.dotnet/tools:$ENV:PATH"
+```
+
+### 4d. Clone, build, and deploy
+
+```powershell
 # Clone the fix branch from the fork
 git clone https://github.com/robw-adobe/Commercial-Marketplace-SaaS-Accelerator.git `
   -b spec/admin-subscription-fetch-resilience --depth 1

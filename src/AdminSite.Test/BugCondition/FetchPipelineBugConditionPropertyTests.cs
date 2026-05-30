@@ -216,7 +216,7 @@ public class FetchPipelineBugConditionPropertyTests
         // is sync-over-async; we wrap in Task.Run + WithTimeout so a wedged path
         // fails the iteration deterministically rather than hanging xunit.
         var actionResult = RunWithCoarseTimeout(() =>
-            Task.Run(() => (IActionResult)harness.Controller.FetchAllSubscriptions()));
+            harness.Controller.FetchAllSubscriptions());
 
         // ===== Property 1 conjuncts (in declaration order) ======================
         var property =
